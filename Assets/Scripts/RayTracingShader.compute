@@ -11,12 +11,14 @@ float4x4 _CameraInverseProjection;
 Texture2D<float4> _SkyboxTexture;
 SamplerState sampler_SkyboxTexture;
 static const float pi = 3.1459f;
+float2 _PixelOffset;
 
 
 struct Ray
 {
     float3 origin;
     float3 direction;
+    float3 energy;
 };
 
 struct RayHit
@@ -41,6 +43,7 @@ Ray CreateRay(float3 origin, float3 direction)
     Ray ray;
     ray.origin = origin;
     ray.direction = direction;
+    ray.energy = float3(1.0f,1.0f,1.0f);
     return ray;
 }
 
@@ -75,10 +78,20 @@ float3 Shade(inout Ray ray, RayHit hit)
 {
     if (hit.distance < 1.#INF)
     {
-        return hit.normal * 0.5f + 0.5f;
+        float3 specular = float3(0.6f, 0.6f, 0.6f); // 60% of all light(RBG) will be reflected back,
+        //can set it up to be specular of material its bouncing off of 
+        
+        ray.origin = hit.position + hit.normal + 0.001f;
+        ray.direction = reflect(ray.direction, hit.normal);
+        ray.energy *= specular;
+        
+        
+        return float3(0.0f, 0.0f, 0.0f);
     }
-    else
+    else    //if ray misses object and hits sky
     {
+        ray.energy = 0.0f;
+        //sample skybox 
         float theta = acos(ray.direction.y) / -pi;
         float phi = atan2(ray.direction.x, -ray.direction.z) / -pi*0.5f;
 
@@ -107,11 +120,36 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, float4 sphere)
 }
 
 
+void SpawnMultipleSphere(in int row_Pass, in int col_Pass, inout Ray ray_Pass, inout RayHit bestHit_Pass)
+{
+    int numRows = row_Pass;
+    int numCols = col_Pass;
+    float xpos = 0.0f;
+    float zpos = 0.0f;
+    float radius = 1.0f;
+    float sphereGap = 0.5f;
+    for ( int rows = 0; rows <= numRows; rows++ )
+    {
+        for ( int cols = 0; cols <= numCols; cols++ )
+        {
+            
+            IntersectSphere(ray_Pass, bestHit_Pass, float4(xpos, 2.0f, zpos, radius)); //float4(xpos, ypos, zpos , radius
+            zpos += radius * 2 + sphereGap;
+
+        }
+        zpos = 0.0f;
+        xpos += radius * 2 + sphereGap;
+    }
+}
+
 RayHit Trace(Ray ray)
 {
     RayHit bestHit = CreateRayHit();
     IntersectGroundPlace(ray, bestHit);
-    IntersectSphere(ray, bestHit, float4(0, 3.0f,0, 1.0f));
+    
+    //Spawn multiple sphere 
+    SpawnMultipleSphere(10, 10, ray, bestHit);
+    
     return bestHit;
 }
 
@@ -127,7 +165,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     Result.GetDimensions(width, height);
     
     // transform pixel to -1 1 range
-    float2 uv = float2((id.xy + float2(0.5f, 0.5f)) / float2(width, height) * 2.0f - 1.0f);
+    float2 uv = float2((id.xy + _PixelOffset) / float2(width, height) * 2.0f - 1.0f);
 
     
     Ray ray = CreateCameraRay(uv);
@@ -140,8 +178,21 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     //color
     //Result[id.xy] = float4(ray.direction * 0.5f + 0.5f, 1.0f);
     
-    RayHit hit = Trace(ray);
-    float3 result = Shade(ray, hit);
+    
+
+    float3 result = float3(0,0,0);
+
+    for(int i=0;i<8;i++)
+    {
+        RayHit hit = Trace(ray);
+        result += ray.energy * Shade(ray,hit);
+
+        if(!any(ray.energy))
+            break;
+    }
+
+
+    //float3 result = Shade(ray, hit);
     Result[id.xy] = float4(result, 1);
     
 }   
